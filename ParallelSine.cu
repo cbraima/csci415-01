@@ -1,4 +1,3 @@
-//
 // Assignment 1: ParallelSine
 // CSCI 415: Networking and Parallel Computation
 // Spring 2017
@@ -16,10 +15,10 @@
 #include <sys/time.h>
 
 // problem size (vector length) N
-static const int N = 12345678;
+static const int N = 12345678; //#of threads?
 
 // Number of terms to use when approximating sine
-static const int TERMS = 6;
+static const int TERMS = 6; //# of blocks
 
 // kernel function (CPU - Do not modify)
 void sine_serial(float *input, float *output)
@@ -27,24 +26,45 @@ void sine_serial(float *input, float *output)
   int i;
 
   for (i=0; i<N; i++) {
-      float value = input[i]; 
-      float numer = input[i] * input[i] * input[i]; 
+      float value = input[i]; //0.1f * i ;i=(0-N)
+      float numer = input[i] * input[i] * input[i]; //input^3
       int denom = 6; // 3! 
       int sign = -1; 
+      //std::cout << input[i] << std::endl;
       for (int j=1; j<=TERMS;j++) 
       { 
          value += sign * numer / denom; 
-         numer *= input[i] * input[i]; 
+         numer *= input[i] * input[i]; //(input^2 * input^3)*blockIdx.x
          denom *= (2*j+2) * (2*j+3); 
          sign *= -1; 
       } 
-      output[i] = value; 
+      output[i] = value;
+      //std::cout << output[i] << std::endl;
     }
 }
 
 
 // kernel function (CUDA device)
 // TODO: Implement your graphics kernel here. See assignment instructions for method information
+__global__ void paralellSine(float *input, float *output)
+{
+	int idx = blockIdx.x * blockDim.x + threadIdx.x; //Proper indexing of elements.
+	float value = input[idx];
+	float numer = input[idx] * input[idx] * input[idx];
+	int denom = 6;
+	int sign = -1;
+
+	for (int j=1; j<=TERMS; j++)
+	{
+		value += sign * numer/denom;
+		numer *= input[idx] * input[idx];
+		denom *= (2 * j + 2) * (2 * j + 3);
+		sign *= -1;
+	}
+	output[idx] = value;
+
+
+}
 
 // BEGIN: timing and error checking routines (do not modify)
 
@@ -96,24 +116,49 @@ void checkErrors(const char label[])
 int main (int argc, char **argv)
 {
   //BEGIN: CPU implementation (do not modify)
-  float *h_cpu_result = (float*)malloc(N*sizeof(float));
-  float *h_input = (float*)malloc(N*sizeof(float));
+  float *d_input;
+  float *d_output;
+  int size = N * sizeof(float);
   //Initialize data on CPU
+  float *h_input = (float*)malloc(N*sizeof(float));
   int i;
   for (i=0; i<N; i++)
   {
     h_input[i] = 0.1f * i;
   }
 
+
   //Execute and time the CPU version
   long long CPU_start_time = start_timer();
+  float *h_cpu_result = (float*)malloc(N*sizeof(float));
   sine_serial(h_input, h_cpu_result);
   long long CPU_time = stop_timer(CPU_start_time, "\nCPU Run Time");
   //END: CPU implementation (do not modify)
 
 
-  //TODO: Prepare and run your kernel, make sure to copy your results back into h_gpu_result and display your timing results
+  long long GPU_Total_start = start_timer();
+
+  long long GPU_Malloc_Start = start_timer();
   float *h_gpu_result = (float*)malloc(N*sizeof(float));
+  cudaMalloc((void **) &d_input, size);
+  cudaMalloc((void **) &d_output, size);
+  long long GPU_Malloc = stop_timer(GPU_Malloc_Start, "\nGPU Memory Allocation");
+
+  long long GPU_Memcpy_start = start_timer();
+  cudaMemcpy(d_input, h_input,size, cudaMemcpyHostToDevice);
+  cudaMemcpy(d_output,h_gpu_result, size, cudaMemcpyHostToDevice);
+  long long GPU_Memcpy = stop_timer(GPU_Memcpy_start, "GPU Memory Copy to Device");
+
+  long long GPU_start_time = start_timer();
+  paralellSine <<< 12057,1024 >>> (d_input, d_output); //Blocks must be < # CUDA cores
+  cudaThreadSynchronize();
+  long long GPU_time = stop_timer(GPU_start_time, "GPU Kernel Run Time");
+
+  long long GPU_MemcpytoHost_start = start_timer();
+  cudaMemcpy(h_gpu_result, d_output, size, cudaMemcpyDeviceToHost);
+  long long GPU_MemcpytoHost = stop_timer(GPU_MemcpytoHost_start, "GPU Memory Copy to Host");
+
+  long long GPU_Time = stop_timer(GPU_Total_start, "GPU Total run time");
 
   // Checking to make sure the CPU and GPU results match - Do not modify
   int errorCount = 0;
@@ -123,14 +168,17 @@ int main (int argc, char **argv)
       errorCount = errorCount + 1;
   }
   if (errorCount > 0)
-    printf("Result comparison failed.\n");
+    printf("\nResult comparison failed.\n");
   else
-    printf("Result comparison passed.\n");
+    printf("\nResult comparison passed.\n");
 
   // Cleaning up memory
   free(h_input);
   free(h_cpu_result);
   free(h_gpu_result);
+
+  cudaFree(d_input);
+
   return 0;
 }
 
